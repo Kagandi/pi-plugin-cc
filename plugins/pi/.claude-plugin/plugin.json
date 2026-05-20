@@ -1,0 +1,8 @@
+{
+  "name": "pi",
+  "version": "1.0.0",
+  "description": "Use Pi from Claude Code to review code or delegate tasks.",
+  "author": {
+    "name": "Pi Team"
+  }
+}
