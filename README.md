@@ -5,8 +5,6 @@ Use Pi from inside Claude Code for code reviews or to delegate tasks to Pi.
 This plugin is for Claude Code users who want an easy way to start using Pi from the workflow
 they already have.
 
-<video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
-
 ## What You Get
 
 - `/pi:review` for a normal read-only Pi review
@@ -24,13 +22,13 @@ they already have.
 Add the marketplace in Claude Code:
 
 ```bash
-/plugin marketplace add pi/pi-plugin-cc
+/plugin marketplace add Kagandi/pi-plugin-cc
 ```
 
 Install the plugin:
 
 ```bash
-/plugin install pi@pi
+/plugin install Kagandi@pi
 ```
 
 Reload plugins:
