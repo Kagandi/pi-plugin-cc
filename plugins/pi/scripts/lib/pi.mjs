@@ -94,8 +94,8 @@ export async function spawnPiProcess(cwd, prompt, options = {}) {
       });
     });
 
-    // Send prompt via stdin
-    child.stdin.write(`${prompt}\n`);
+    // Send prompt via stdin as JSON command
+    child.stdin.write(JSON.stringify({ type: "prompt", message: prompt }) + "\n");
     child.stdin.end();
   });
 }
