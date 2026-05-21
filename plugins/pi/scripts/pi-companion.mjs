@@ -10,7 +10,7 @@ import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
   getPiAvailability,
   getSessionRuntimeStatus,
-  spawnPiProcess,
+  runPiTurn,
   interruptPiProcess,
   parseStructuredOutput,
   buildTaskThreadName
@@ -356,15 +356,9 @@ ${reviewContext.content}
 
 Provide your review findings in structured JSON format matching the schema. Focus on security, correctness, and design issues.`;
 
-    const result = await spawnPiProcess(request.cwd, prompt, {
-      write: false,
+    const result = await runPiTurn(request.cwd, prompt, {
       model: request.model,
       onProgress: request.onProgress
-    });
-
-    const parsed = parseStructuredOutput(result.stdout, {
-      status: result.exitCode,
-      failureMessage: result.stderr
     });
 
     const payload = {
@@ -375,17 +369,17 @@ Provide your review findings in structured JSON format matching the schema. Focu
       pi: {
         status: result.exitCode,
         stderr: result.stderr,
-        stdout: result.stdout,
-        reasoning: []
+        stdout: result.finalMessage,
+        reasoning: result.reasoningSummary
       }
     };
     const rendered = renderNativeReviewResult(
       {
         status: result.exitCode,
-        stdout: result.stdout,
+        stdout: result.finalMessage,
         stderr: result.stderr
       },
-      { reviewLabel: reviewName, targetLabel: target.label, reasoningSummary: [] }
+      { reviewLabel: reviewName, targetLabel: target.label, reasoningSummary: result.reasoningSummary }
     );
 
     return {
@@ -394,7 +388,7 @@ Provide your review findings in structured JSON format matching the schema. Focu
       turnId: null,
       payload,
       rendered,
-      summary: firstMeaningfulLine(result.stdout, `${reviewName} completed.`),
+      summary: firstMeaningfulLine(result.finalMessage, `${reviewName} completed.`),
       jobTitle: `Pi ${reviewName}`,
       jobClass: "review",
       targetLabel: target.label
@@ -404,13 +398,12 @@ Provide your review findings in structured JSON format matching the schema. Focu
   // Adversarial review
   const context = collectReviewContext(request.cwd, target);
   const prompt = buildAdversarialReviewPrompt(context, focusText);
-  const result = await spawnPiProcess(request.cwd, prompt, {
-    write: false,
+  const result = await runPiTurn(request.cwd, prompt, {
     model: request.model,
     onProgress: request.onProgress
   });
 
-  const parsed = parseStructuredOutput(result.stdout, {
+  const parsed = parseStructuredOutput(result.finalMessage, {
     status: result.exitCode,
     failureMessage: result.stderr
   });
@@ -426,12 +419,12 @@ Provide your review findings in structured JSON format matching the schema. Focu
     pi: {
       status: result.exitCode,
       stderr: result.stderr,
-      stdout: result.stdout
+      stdout: result.finalMessage
     },
     result: parsed.parsed,
     rawOutput: parsed.rawOutput,
     parseError: parsed.parseError,
-    reasoningSummary: []
+    reasoningSummary: result.reasoningSummary
   };
 
   return {
@@ -442,9 +435,9 @@ Provide your review findings in structured JSON format matching the schema. Focu
     rendered: renderReviewResult(parsed, {
       reviewLabel: reviewName,
       targetLabel: context.target.label,
-      reasoningSummary: []
+      reasoningSummary: result.reasoningSummary
     }),
-    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.stdout, `${reviewName} finished.`),
+    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
     jobTitle: `Pi ${reviewName}`,
     jobClass: "review",
     targetLabel: context.target.label
@@ -476,21 +469,20 @@ async function executeTaskRun(request) {
   }
 
   const prompt = request.prompt || (resumeThreadId ? "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved." : "");
-  const result = await spawnPiProcess(workspaceRoot, prompt, {
+  const result = await runPiTurn(workspaceRoot, prompt, {
     model: request.model,
     effort: request.effort,
-    write: request.write,
     onProgress: request.onProgress,
     env: resumeThreadId ? { PI_SESSION_ID_ENV: resumeThreadId } : undefined
   });
 
-  const rawOutput = typeof result.stdout === "string" ? result.stdout : "";
+  const finalMessage = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.stderr || "";
   const rendered = renderTaskResult(
     {
-      rawOutput,
+      rawOutput: finalMessage,
       failureMessage,
-      reasoningSummary: []
+      reasoningSummary: result.reasoningSummary
     },
     {
       title: taskMetadata.title,
@@ -501,9 +493,9 @@ async function executeTaskRun(request) {
   const payload = {
     status: result.exitCode,
     threadId: null,
-    rawOutput,
-    touchedFiles: [],
-    reasoningSummary: []
+    rawOutput: finalMessage,
+    touchedFiles: result.touchedFiles,
+    reasoningSummary: result.reasoningSummary
   };
 
   return {
@@ -512,7 +504,7 @@ async function executeTaskRun(request) {
     turnId: null,
     payload,
     rendered,
-    summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
+    summary: firstMeaningfulLine(finalMessage, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
     write: Boolean(request.write)

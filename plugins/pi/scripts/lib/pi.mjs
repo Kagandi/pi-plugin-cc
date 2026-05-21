@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
 import { binaryAvailable } from "./process.mjs";
+import { runPiTurn, interruptPiProcess } from "./pi-rpc.mjs";
 
 const PI_SESSION_ID_ENV = "PI_COMPANION_SESSION_ID";
 const TASK_THREAD_PREFIX = "Pi Companion Task";
@@ -48,118 +47,6 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   };
 }
 
-function extractAssistantTextFromStream(rawStdout) {
-  const lines = rawStdout.split(/\r?\n/).filter((line) => line.trim());
-  let lastAssistantText = "";
-  let lastAssistantThinking = "";
-  let lastAssistantMessageEnd = null;
-
-  for (const line of lines) {
-    let parsed;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    if (parsed.type === "message_end" && parsed.message?.role === "assistant") {
-      lastAssistantMessageEnd = parsed.message;
-    }
-
-    if (parsed.type === "agent_end" && Array.isArray(parsed.messages)) {
-      const assistantMsg = parsed.messages.find((m) => m.role === "assistant");
-      if (assistantMsg && Array.isArray(assistantMsg.content)) {
-        for (const part of assistantMsg.content) {
-          if (part.type === "text" && part.text) {
-            lastAssistantText = part.text;
-          }
-          if (part.type === "thinking" && part.thinking) {
-            lastAssistantThinking = part.thinking;
-          }
-        }
-      }
-    }
-  }
-
-  if (lastAssistantMessageEnd && Array.isArray(lastAssistantMessageEnd.content)) {
-    for (const part of lastAssistantMessageEnd.content) {
-      if (part.type === "text" && part.text) {
-        lastAssistantText = part.text;
-      }
-      if (part.type === "thinking" && part.thinking) {
-        lastAssistantThinking = part.thinking;
-      }
-    }
-  }
-
-  return { text: lastAssistantText, thinking: lastAssistantThinking };
-}
-
-export async function spawnPiProcess(cwd, prompt, options = {}) {
-  return new Promise((resolve, reject) => {
-    const args = ["-p", "--mode", "json", "--no-session"];
-    if (options.model) {
-      args.push("--model", options.model);
-    }
-    if (options.effort) {
-      args.push("--thinking", options.effort);
-    }
-    // Pass prompt as remaining positional arguments
-    args.push(prompt);
-
-    const child = spawn("pi", args, {
-      cwd,
-      env: { ...process.env, ...options.env },
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (data) => {
-      stdout += data.toString();
-      options.onProgress?.({ message: data.toString().trim(), phase: "running" });
-    });
-
-    child.stderr.on("data", (data) => {
-      stderr += data.toString();
-      options.onProgress?.({ message: data.toString().trim(), phase: "stderr" });
-    });
-
-    child.on("error", (error) => {
-      reject(new Error(`Failed to spawn pi: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      const extracted = extractAssistantTextFromStream(stdout);
-      resolve({
-        pid: child.pid,
-        exitCode: code,
-        stdout: extracted.text ?? "",
-        stderr: stderr.trim(),
-        code,
-        thinking: extracted.thinking ?? ""
-      });
-    });
-  });
-}
-
-export function interruptPiProcess(pid) {
-  if (!pid || !Number.isFinite(pid)) {
-    return { attempted: false, interrupted: false, detail: "no pid" };
-  }
-
-  try {
-    process.kill(pid, "SIGINT");
-    return { attempted: true, interrupted: true, detail: `Sent SIGINT to ${pid}.` };
-  } catch (error) {
-    if (error.code === "ESRCH") {
-      return { attempted: true, interrupted: false, detail: `Process ${pid} not found.` };
-    }
-    return { attempted: true, interrupted: false, detail: error.message };
-  }
-}
-
 export function buildTaskThreadName(prompt) {
   const excerpt = shorten(prompt, 56);
   return excerpt ? `${TASK_THREAD_PREFIX}: ${excerpt}` : TASK_THREAD_PREFIX;
@@ -192,8 +79,4 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
   }
 }
 
-export function readOutputSchema(schemaPath) {
-  return JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-}
-
-export { DEFAULT_CONTINUE_PROMPT, TASK_THREAD_PREFIX, PI_SESSION_ID_ENV };
+export { runPiTurn, interruptPiProcess, DEFAULT_CONTINUE_PROMPT, TASK_THREAD_PREFIX, PI_SESSION_ID_ENV };
