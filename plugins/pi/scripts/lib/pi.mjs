@@ -48,23 +48,69 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   };
 }
 
+function extractAssistantTextFromStream(rawStdout) {
+  const lines = rawStdout.split(/\r?\n/).filter((line) => line.trim());
+  let lastAssistantText = "";
+  let lastAssistantThinking = "";
+  let lastAssistantMessageEnd = null;
+
+  for (const line of lines) {
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (parsed.type === "message_end" && parsed.message?.role === "assistant") {
+      lastAssistantMessageEnd = parsed.message;
+    }
+
+    if (parsed.type === "agent_end" && Array.isArray(parsed.messages)) {
+      const assistantMsg = parsed.messages.find((m) => m.role === "assistant");
+      if (assistantMsg && Array.isArray(assistantMsg.content)) {
+        for (const part of assistantMsg.content) {
+          if (part.type === "text" && part.text) {
+            lastAssistantText = part.text;
+          }
+          if (part.type === "thinking" && part.thinking) {
+            lastAssistantThinking = part.thinking;
+          }
+        }
+      }
+    }
+  }
+
+  if (lastAssistantMessageEnd && Array.isArray(lastAssistantMessageEnd.content)) {
+    for (const part of lastAssistantMessageEnd.content) {
+      if (part.type === "text" && part.text) {
+        lastAssistantText = part.text;
+      }
+      if (part.type === "thinking" && part.thinking) {
+        lastAssistantThinking = part.thinking;
+      }
+    }
+  }
+
+  return { text: lastAssistantText, thinking: lastAssistantThinking };
+}
+
 export async function spawnPiProcess(cwd, prompt, options = {}) {
   return new Promise((resolve, reject) => {
-    const args = ["--mode", "rpc"];
+    const args = ["-p", "--mode", "json", "--no-session"];
     if (options.model) {
       args.push("--model", options.model);
     }
-    if (options.write) {
-      args.push("--write");
-    }
     if (options.effort) {
-      args.push("--effort", options.effort);
+      args.push("--thinking", options.effort);
     }
+    // Pass prompt as remaining positional arguments
+    args.push(prompt);
 
     const child = spawn("pi", args, {
       cwd,
       env: { ...process.env, ...options.env },
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"]
     });
 
     let stdout = "";
@@ -85,18 +131,16 @@ export async function spawnPiProcess(cwd, prompt, options = {}) {
     });
 
     child.on("close", (code) => {
+      const extracted = extractAssistantTextFromStream(stdout);
       resolve({
         pid: child.pid,
         exitCode: code,
-        stdout: stdout.trim(),
+        stdout: extracted.text ?? "",
         stderr: stderr.trim(),
-        code
+        code,
+        thinking: extracted.thinking ?? ""
       });
     });
-
-    // Send prompt via stdin as JSON command
-    child.stdin.write(JSON.stringify({ type: "prompt", message: prompt }) + "\n");
-    child.stdin.end();
   });
 }
 
